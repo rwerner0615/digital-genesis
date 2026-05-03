@@ -1,6 +1,6 @@
 import random
 import argparse
-from world import World
+from world import World, HARD_POPULATION_CAP
 from genome import Genome, Gene
 from cell import Cell
 
@@ -42,6 +42,10 @@ def run(seed: int = 42, max_ticks: int = 1000, print_interval: int = 50) -> list
                     new_children.append(child)
 
         cells = [c for c in cells if c.alive] + new_children
+
+        if len(cells) > HARD_POPULATION_CAP:
+            random.shuffle(cells)
+            cells = cells[:HARD_POPULATION_CAP]
 
         if not cells:
             print(f"EXTINCTION at tick {tick}")

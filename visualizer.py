@@ -1,7 +1,7 @@
 import colorsys
 import random
 import pygame
-from world import World
+from world import World, HARD_POPULATION_CAP
 from genome import Genome, Gene
 from cell import Cell
 from simulation import ANCESTOR_GENOME
@@ -112,6 +112,11 @@ class Visualizer:
                     new_children.append(child)
 
         self.cells = [c for c in self.cells if c.alive] + new_children
+
+        if len(self.cells) > HARD_POPULATION_CAP:
+            random.shuffle(self.cells)
+            self.cells = self.cells[:HARD_POPULATION_CAP]
+
         self.tick += 1
 
         n = len(self.cells)

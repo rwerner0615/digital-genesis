@@ -3,7 +3,8 @@ import numpy as np
 GRID_SIZE = 200
 MAX_NUTRIENT = 100.0
 REGEN_RATE = 1.0
-SOFT_POPULATION_CAP = 800
+SOFT_POPULATION_CAP = 800   # regen scales to 0 at 2× this
+HARD_POPULATION_CAP = 1500  # crash guard: cull randomly above this
 
 
 class World:
@@ -13,7 +14,9 @@ class World:
 
     def tick(self, population: int = 0):
         if population > SOFT_POPULATION_CAP:
-            effective_rate = REGEN_RATE * (SOFT_POPULATION_CAP / population)
+            # Linear ramp: full regen at cap, zero regen at 2×cap
+            ratio = (2 * SOFT_POPULATION_CAP - population) / SOFT_POPULATION_CAP
+            effective_rate = REGEN_RATE * max(0.0, ratio)
         else:
             effective_rate = REGEN_RATE
         np.add(self.nutrient_level, effective_rate, out=self.nutrient_level)
