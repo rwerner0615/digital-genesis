@@ -101,7 +101,7 @@ class Visualizer:
     # ------------------------------------------------------------------ #
 
     def _sim_tick(self):
-        self.world.tick()
+        self.world.tick(len(self.cells))
         random.shuffle(self.cells)
 
         new_children = []

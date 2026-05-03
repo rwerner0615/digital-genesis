@@ -31,7 +31,7 @@ def run(seed: int = 42, max_ticks: int = 1000, print_interval: int = 50) -> list
     print("-" * 72)
 
     for tick in range(1, max_ticks + 1):
-        world.tick()
+        world.tick(len(cells))
         random.shuffle(cells)
 
         new_children = []
