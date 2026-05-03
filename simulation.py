@@ -1,18 +1,9 @@
 import random
 import argparse
-from world import World, HARD_POPULATION_CAP
-from genome import Genome, Gene
-from cell import Cell
 
-ANCESTOR_GENOME = Genome([
-    Gene('SIZE', 1.0),
-    Gene('METABOLISM', 1.0),
-    Gene('MOTILITY', 1.0),
-    Gene('SENSE_RANGE', 1.0),
-    Gene('DIET_NUTRIENT', 1.0),
-    Gene('MUTATION_RATE', 0.3),
-    Gene('REPRODUCTION_THRESHOLD', 50.0),
-])
+from world import World, GRID_SIZE, HARD_POPULATION_CAP
+from dna import ANCESTOR, mutate
+from cell import Cell, build_cell_index
 
 
 def run(seed: int = 42, max_ticks: int = 1000, print_interval: int = 50) -> list:
@@ -20,59 +11,97 @@ def run(seed: int = 42, max_ticks: int = 1000, print_interval: int = 50) -> list
     Cell._next_id = 0
 
     world = World(seed=seed)
-    ancestor = Cell((100, 100), Genome([Gene(g.type, g.value) for g in ANCESTOR_GENOME.genes]))
+    ancestor = Cell((100, 100), ANCESTOR)
     cells = [ancestor]
+    all_lineage_ids: set = {ancestor.lineage_id}
 
     print(f"seed={seed}  max_ticks={max_ticks}")
-    print(f"ancestor: {ancestor.genome}")
+    print(f"ancestor dna ({len(ANCESTOR)} letters): {ANCESTOR}")
     print()
-    print(f"{'tick':>6}  {'pop':>6}  {'lineages':>8}  {'avg_genes':>9}  "
-          f"{'avg_energy':>10}  {'predators':>9}  {'mut_rate':>8}")
-    print("-" * 72)
+    _print_header()
+    _print_stats(0, cells, all_lineage_ids)
 
     for tick in range(1, max_ticks + 1):
         world.tick(len(cells))
+
+        # Build spatial index once per tick, shared by all cell.tick() calls
+        cell_index = build_cell_index(cells)
         random.shuffle(cells)
 
-        new_children = []
+        new_children: list = []
         for cell in cells:
             if cell.alive:
-                child = cell.tick(world, cells)
-                if child is not None:
-                    new_children.append(child)
+                new_children.extend(cell.tick(world, cell_index))
 
         cells = [c for c in cells if c.alive] + new_children
 
-        if len(cells) > HARD_POPULATION_CAP:
-            random.shuffle(cells)
-            cells = cells[:HARD_POPULATION_CAP]
+        for c in new_children:
+            all_lineage_ids.add(c.lineage_id)
+
+        # Population guardian: near-extinction → clone survivors with mutation
+        if 0 < len(cells) < 5:
+            cells = _population_guardian(cells)
+            for c in cells:
+                all_lineage_ids.add(c.lineage_id)
 
         if not cells:
             print(f"EXTINCTION at tick {tick}")
             return cells
 
+        if len(cells) > HARD_POPULATION_CAP:
+            random.shuffle(cells)
+            cells = cells[:HARD_POPULATION_CAP]
+
         if tick == 1 or tick % print_interval == 0:
-            _print_stats(tick, cells)
+            _print_stats(tick, cells, all_lineage_ids)
 
     print()
     print("=== final state ===")
-    _print_stats(max_ticks, cells)
+    _print_stats(max_ticks, cells, all_lineage_ids)
     return cells
 
 
-def _print_stats(tick: int, cells: list):
+def _population_guardian(cells: list) -> list:
+    target = 10
+    added = []
+    while len(cells) + len(added) < target:
+        src = random.choice(cells)
+        child_dna = mutate(src.dna, src.phenotype.stats['mutation_rate'])
+        pos = (
+            (src.position[0] + random.randint(-3, 3)) % GRID_SIZE,
+            (src.position[1] + random.randint(-3, 3)) % GRID_SIZE,
+        )
+        child = Cell(pos, child_dna, parent_id=src.id)
+        child.energy = max(30.0, src.energy * 0.7)
+
+        src_bp = frozenset(src.phenotype.body_parts.keys())
+        child_bp = frozenset(child.phenotype.body_parts.keys())
+        if child_bp == src_bp and child.phenotype.behaviors == src.phenotype.behaviors:
+            child.lineage_id = src.lineage_id
+
+        added.append(child)
+    return cells + added
+
+
+def _print_header():
+    print(f"{'tick':>6}  {'pop':>5}  {'live/ever':>10}  {'predators':>9}  "
+          f"{'avg_dna':>7}  {'avg_energy':>10}")
+    print("-" * 60)
+
+
+def _print_stats(tick: int, cells: list, all_lineage_ids: set):
     n = len(cells)
-    avg_genes = sum(len(c.genome) for c in cells) / n
+    live_lineages = len(set(c.lineage_id for c in cells))
+    ever_lineages = len(all_lineage_ids)
+    predators = sum(1 for c in cells if c.phenotype.stats['cell_eat'] > 0)
+    avg_dna = sum(len(c.dna) for c in cells) / n
     avg_energy = sum(c.energy for c in cells) / n
-    predators = sum(1 for c in cells if c.genome.get_trait('DIET_CELL') > 0)
-    lineages = len(set(c.lineage_id for c in cells))
-    avg_mr = sum(c.genome.get_trait('MUTATION_RATE') for c in cells) / n
-    print(f"{tick:>6}  {n:>6}  {lineages:>8}  {avg_genes:>9.2f}  "
-          f"{avg_energy:>10.1f}  {predators:>9}  {avg_mr:>8.3f}")
+    print(f"{tick:>6}  {n:>5}  {live_lineages:>4}/{ever_lineages:<5}  "
+          f"{predators:>9}  {avg_dna:>7.1f}  {avg_energy:>10.1f}")
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='DigitalGenesis headless simulation')
+    parser = argparse.ArgumentParser(description='DigitalGenesis v2 headless')
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--ticks', type=int, default=1000)
     parser.add_argument('--interval', type=int, default=50)

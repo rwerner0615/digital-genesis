@@ -135,7 +135,7 @@ def parse_dna(genome: str) -> Phenotype:
     stats['cell_eat']               = max(0.0,  stats['cell_eat'])
     stats['size']                   = max(1.0,  stats['size'])
     stats['metabolism']             = max(0.1,  stats['metabolism'])
-    stats['mutation_rate']          = max(0.05, stats['mutation_rate'])
+    stats['mutation_rate']          = min(1.0, max(0.05, stats['mutation_rate']))
     stats['energy_capacity']        = max(10.0, stats['energy_capacity'])
     stats['energy_efficiency']      = max(0.1,  stats['energy_efficiency'])
     stats['max_age']                = max(50,   int(stats['max_age']))
