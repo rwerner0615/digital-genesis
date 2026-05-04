@@ -95,7 +95,7 @@ class Cell:
         eff = self.phenotype.effective_stats(active_conds)
 
         total_parts = sum(self.phenotype.body_parts.values())
-        self.energy -= (0.1 * eff['size'] + 0.015 * total_parts) / eff['energy_efficiency']
+        self.energy -= (0.1 * eff['size'] + 0.015 * total_parts + 0.01 * len(self.dna)) / eff['energy_efficiency']
         self.age += 1
 
         if eff['motility'] > 0:

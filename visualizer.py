@@ -15,10 +15,13 @@ WORLD_PX = 720
 PANEL_X  = WORLD_PX
 PANEL_W  = WINDOW_W - WORLD_PX
 
-VIEW_SIZE  = 100                        # grid units shown (100×100 section)
-VIEW_SCALE = WORLD_PX / VIEW_SIZE       # 7.2 px per grid unit
-PAN_STEP   = 5                          # grid units per arrow-key press
-_PAN_HOLD  = 300                        # ticks before auto-tracking resumes
+# Viewport zoom limits (pixels per grid unit)
+_INIT_SCALE = WORLD_PX / 100.0          # start showing 100×100 grid units
+_MIN_SCALE  = WORLD_PX / float(GRID_SIZE)  # full world visible
+_MAX_SCALE  = WORLD_PX / 20.0           # maximum zoom (20×20 grid units)
+_ZOOM_STEP  = 1.15                       # scale multiplier per scroll tick
+
+_PAN_HOLD = 300   # ticks before auto-tracking resumes after manual pan
 
 POP_HISTORY_LEN = 500
 
@@ -198,10 +201,12 @@ class Visualizer:
         self.most_complex_cell  = None
         self.predation_evolved  = False
 
-        # Viewport: top-left corner in grid coords; starts centered on the world
-        self.view_x: float = (GRID_SIZE - VIEW_SIZE) / 2.0
-        self.view_y: float = (GRID_SIZE - VIEW_SIZE) / 2.0
-        self._pan_timer: int = 0   # ticks remaining before auto-tracking resumes
+        # Viewport: top-left corner in grid coords, scale in px/grid-unit
+        self.view_x: float     = (GRID_SIZE - WORLD_PX / _INIT_SCALE) / 2.0
+        self.view_y: float     = (GRID_SIZE - WORLD_PX / _INIT_SCALE) / 2.0
+        self.view_scale: float = _INIT_SCALE
+        self._pan_timer: int   = 0   # ticks before auto-tracking resumes
+        self._drag_anchor: tuple | None = None   # (px, py, vx0, vy0) on mouse-down
 
     # ── main loop ─────────────────────────────────────────────────────────────
 
@@ -227,21 +232,36 @@ class Visualizer:
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     running = False
+
                 elif event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_ESCAPE:
                         running = False
-                    elif event.key == pygame.K_LEFT:
-                        self.view_x = max(0.0, self.view_x - PAN_STEP)
-                        self._pan_timer = _PAN_HOLD
-                    elif event.key == pygame.K_RIGHT:
-                        self.view_x = min(float(GRID_SIZE - VIEW_SIZE), self.view_x + PAN_STEP)
-                        self._pan_timer = _PAN_HOLD
-                    elif event.key == pygame.K_UP:
-                        self.view_y = max(0.0, self.view_y - PAN_STEP)
-                        self._pan_timer = _PAN_HOLD
-                    elif event.key == pygame.K_DOWN:
-                        self.view_y = min(float(GRID_SIZE - VIEW_SIZE), self.view_y + PAN_STEP)
-                        self._pan_timer = _PAN_HOLD
+
+                elif event.type == pygame.MOUSEBUTTONDOWN:
+                    if event.pos[0] < WORLD_PX:
+                        if event.button == 1:
+                            self._drag_anchor = (event.pos[0], event.pos[1],
+                                                  self.view_x, self.view_y)
+                            self._pan_timer = _PAN_HOLD
+                        elif event.button == 4:   # scroll up → zoom in
+                            self._zoom(event.pos[0], event.pos[1], _ZOOM_STEP)
+                            self._pan_timer = _PAN_HOLD
+                        elif event.button == 5:   # scroll down → zoom out
+                            self._zoom(event.pos[0], event.pos[1], 1.0 / _ZOOM_STEP)
+                            self._pan_timer = _PAN_HOLD
+
+                elif event.type == pygame.MOUSEBUTTONUP:
+                    if event.button == 1:
+                        self._drag_anchor = None
+
+                elif event.type == pygame.MOUSEMOTION:
+                    if self._drag_anchor is not None:
+                        ax, ay, vx0, vy0 = self._drag_anchor
+                        dpx = event.pos[0] - ax
+                        dpy = event.pos[1] - ay
+                        self.view_x = vx0 - dpx / self.view_scale
+                        self.view_y = vy0 - dpy / self.view_scale
+                        self._clamp_view()
 
             if not running:
                 break
@@ -315,7 +335,21 @@ class Visualizer:
         else:
             self._track_cluster()
 
-    # ── viewport tracking ─────────────────────────────────────────────────────
+    # ── viewport helpers ──────────────────────────────────────────────────────
+
+    def _zoom(self, mx: int, my: int, factor: float) -> None:
+        """Zoom in/out keeping the grid point under (mx, my) fixed."""
+        gx = self.view_x + mx / self.view_scale
+        gy = self.view_y + my / self.view_scale
+        self.view_scale = max(_MIN_SCALE, min(_MAX_SCALE, self.view_scale * factor))
+        self.view_x = gx - mx / self.view_scale
+        self.view_y = gy - my / self.view_scale
+        self._clamp_view()
+
+    def _clamp_view(self) -> None:
+        vs = WORLD_PX / self.view_scale
+        self.view_x = max(0.0, min(float(GRID_SIZE) - vs, self.view_x))
+        self.view_y = max(0.0, min(float(GRID_SIZE) - vs, self.view_y))
 
     def _cluster_center(self) -> tuple[float, float]:
         """Return the center of the densest 10×10 bin of population."""
@@ -331,8 +365,9 @@ class Visualizer:
 
     def _track_cluster(self) -> None:
         cx, cy = self._cluster_center()
-        self.view_x = max(0.0, min(float(GRID_SIZE - VIEW_SIZE), cx - VIEW_SIZE / 2))
-        self.view_y = max(0.0, min(float(GRID_SIZE - VIEW_SIZE), cy - VIEW_SIZE / 2))
+        vs = WORLD_PX / self.view_scale
+        self.view_x = max(0.0, min(float(GRID_SIZE) - vs, cx - vs / 2))
+        self.view_y = max(0.0, min(float(GRID_SIZE) - vs, cy - vs / 2))
 
     # ── rendering ─────────────────────────────────────────────────────────────
 
@@ -342,14 +377,15 @@ class Visualizer:
         self._draw_panel(screen, font_sm, font_md, font_lg)
 
     def _draw_world(self, screen) -> None:
-        vx, vy = self.view_x, self.view_y
-        # Cull cells outside viewport with a small margin
-        margin = 20.0 / VIEW_SCALE
+        vx, vy   = self.view_x, self.view_y
+        scale    = self.view_scale
+        vs       = WORLD_PX / scale       # visible grid units
+        margin   = 20.0 / scale
         for cell in self.cells:
             x, y = cell.position
-            if (-margin <= x - vx <= VIEW_SIZE + margin and
-                    -margin <= y - vy <= VIEW_SIZE + margin):
-                _draw_cell(screen, cell, vx, vy, VIEW_SCALE)
+            if (-margin <= x - vx <= vs + margin and
+                    -margin <= y - vy <= vs + margin):
+                _draw_cell(screen, cell, vx, vy, scale)
 
     def _draw_panel(self, screen, font_sm, font_md, font_lg) -> None:
         pygame.draw.rect(screen, C_PANEL_BG, pygame.Rect(PANEL_X, 0, PANEL_W, WINDOW_H))
@@ -385,9 +421,10 @@ class Visualizer:
             y += row_h
 
         # Viewport info
+        vs = WORLD_PX / self.view_scale
         y += 4
         screen.blit(font_sm.render(
-            f"View: ({self.view_x:.0f},{self.view_y:.0f})  100×100",
+            f"View: ({self.view_x:.0f},{self.view_y:.0f})  {vs:.0f}×{vs:.0f}",
             True, C_LABEL), (px0, y))
         y += 16
 
@@ -432,7 +469,7 @@ class Visualizer:
                 screen.blit(font_sm.render(bp_str, True, (90, 100, 118)), (px0, y))
             y += 16
 
-        footer = f"--speed {self.speed}   --seed {self.seed}   [←↑→↓ pan]"
+        footer = f"--speed {self.speed}   --seed {self.seed}   [drag: pan  scroll: zoom]"
         if self.predation_evolved:
             footer += "   [predation ACTIVE]"
         screen.blit(font_sm.render(footer, True, (75, 85, 105)), (px0, WINDOW_H - 20))

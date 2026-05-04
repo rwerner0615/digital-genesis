@@ -85,8 +85,8 @@ def _population_guardian(cells: list) -> list:
 
 def _print_header():
     print(f"{'tick':>6}  {'pop':>5}  {'live/ever':>10}  {'predators':>9}  "
-          f"{'avg_dna':>7}  {'avg_energy':>10}")
-    print("-" * 60)
+          f"{'avg_dna':>7}  {'max_dna':>7}  {'avg_energy':>10}")
+    print("-" * 70)
 
 
 def _print_stats(tick: int, cells: list, all_lineage_ids: set):
@@ -94,10 +94,12 @@ def _print_stats(tick: int, cells: list, all_lineage_ids: set):
     live_lineages = len(set(c.lineage_id for c in cells))
     ever_lineages = len(all_lineage_ids)
     predators = sum(1 for c in cells if c.phenotype.stats['cell_eat'] > 0)
-    avg_dna = sum(len(c.dna) for c in cells) / n
+    dna_lens = [len(c.dna) for c in cells]
+    avg_dna = sum(dna_lens) / n
+    max_dna = max(dna_lens)
     avg_energy = sum(c.energy for c in cells) / n
     print(f"{tick:>6}  {n:>5}  {live_lineages:>4}/{ever_lineages:<5}  "
-          f"{predators:>9}  {avg_dna:>7.1f}  {avg_energy:>10.1f}")
+          f"{predators:>9}  {avg_dna:>7.1f}  {max_dna:>7}  {avg_energy:>10.1f}")
 
 
 if __name__ == '__main__':
