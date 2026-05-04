@@ -14,7 +14,11 @@ WINDOW_H = 720
 WORLD_PX = 720
 PANEL_X  = WORLD_PX
 PANEL_W  = WINDOW_W - WORLD_PX
-SCALE    = WORLD_PX / GRID_SIZE   # 3.6 px per grid unit
+
+VIEW_SIZE  = 100                        # grid units shown (100×100 section)
+VIEW_SCALE = WORLD_PX / VIEW_SIZE       # 7.2 px per grid unit
+PAN_STEP   = 5                          # grid units per arrow-key press
+_PAN_HOLD  = 300                        # ticks before auto-tracking resumes
 
 POP_HISTORY_LEN = 500
 
@@ -46,8 +50,12 @@ _color_cache: dict = {}
 
 def _lineage_color(lineage_id: int) -> tuple:
     if lineage_id not in _color_cache:
-        hue = (lineage_id * 137.508) % 360
-        r, g, b = colorsys.hsv_to_rgb(hue / 360.0, 0.75, 0.95)
+        # Knuth multiplicative hash scrambles small integers across full hue range
+        h = (lineage_id * 2654435769) & 0xFFFFFFFF
+        hue = (h % 360) / 360.0
+        sat = 0.65 + ((h >> 16) & 0x3F) / float(0x3F) * 0.30   # 0.65–0.95
+        val = 0.80 + ((h >> 22) & 0x1F) / float(0x1F) * 0.15   # 0.80–0.95
+        r, g, b = colorsys.hsv_to_rgb(hue, sat, val)
         _color_cache[lineage_id] = (int(r * 255), int(g * 255), int(b * 255))
     return _color_cache[lineage_id]
 
@@ -63,16 +71,16 @@ def _cell_color(cell) -> tuple:
 
 # ── composed-body renderer ─────────────────────────────────────────────────────
 
-def _draw_cell(surf: pygame.Surface, cell, scale: float) -> None:
-    cx = round(cell.position[0] * scale)
-    cy = round(cell.position[1] * scale)
+def _draw_cell(surf: pygame.Surface, cell, vx: float, vy: float, scale: float) -> None:
+    cx = round((cell.position[0] - vx) * scale)
+    cy = round((cell.position[1] - vy) * scale)
     ph  = cell.phenotype
     bp  = ph.body_parts
     sym = ph.symmetric_parts
     color = _cell_color(cell)
 
-    # body_mass (slot 9) → enlarges the core circle
-    body_r = max(2, round(ph.stats['size'] * 1.5))
+    # Minimum 8px radius so body parts are always visible
+    body_r = max(8, round(ph.stats['size'] * 1.5))
 
     # shell (slot 10) → outer protective ring drawn first
     if 'shell' in bp:
@@ -190,6 +198,11 @@ class Visualizer:
         self.most_complex_cell  = None
         self.predation_evolved  = False
 
+        # Viewport: top-left corner in grid coords; starts centered on the world
+        self.view_x: float = (GRID_SIZE - VIEW_SIZE) / 2.0
+        self.view_y: float = (GRID_SIZE - VIEW_SIZE) / 2.0
+        self._pan_timer: int = 0   # ticks remaining before auto-tracking resumes
+
     # ── main loop ─────────────────────────────────────────────────────────────
 
     def run(self) -> None:
@@ -214,8 +227,21 @@ class Visualizer:
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     running = False
-                elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
-                    running = False
+                elif event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_ESCAPE:
+                        running = False
+                    elif event.key == pygame.K_LEFT:
+                        self.view_x = max(0.0, self.view_x - PAN_STEP)
+                        self._pan_timer = _PAN_HOLD
+                    elif event.key == pygame.K_RIGHT:
+                        self.view_x = min(float(GRID_SIZE - VIEW_SIZE), self.view_x + PAN_STEP)
+                        self._pan_timer = _PAN_HOLD
+                    elif event.key == pygame.K_UP:
+                        self.view_y = max(0.0, self.view_y - PAN_STEP)
+                        self._pan_timer = _PAN_HOLD
+                    elif event.key == pygame.K_DOWN:
+                        self.view_y = min(float(GRID_SIZE - VIEW_SIZE), self.view_y + PAN_STEP)
+                        self._pan_timer = _PAN_HOLD
 
             if not running:
                 break
@@ -283,6 +309,31 @@ class Visualizer:
             self.pop_history.pop(0)
             self.pred_history.pop(0)
 
+        # Auto-track densest cluster unless user is manually panning
+        if self._pan_timer > 0:
+            self._pan_timer -= 1
+        else:
+            self._track_cluster()
+
+    # ── viewport tracking ─────────────────────────────────────────────────────
+
+    def _cluster_center(self) -> tuple[float, float]:
+        """Return the center of the densest 10×10 bin of population."""
+        if not self.cells:
+            return GRID_SIZE / 2.0, GRID_SIZE / 2.0
+        BIN = 10
+        bins: dict = {}
+        for c in self.cells:
+            key = (int(c.position[0] // BIN), int(c.position[1] // BIN))
+            bins[key] = bins.get(key, 0) + 1
+        bx, by = max(bins, key=bins.__getitem__)
+        return (bx + 0.5) * BIN, (by + 0.5) * BIN
+
+    def _track_cluster(self) -> None:
+        cx, cy = self._cluster_center()
+        self.view_x = max(0.0, min(float(GRID_SIZE - VIEW_SIZE), cx - VIEW_SIZE / 2))
+        self.view_y = max(0.0, min(float(GRID_SIZE - VIEW_SIZE), cy - VIEW_SIZE / 2))
+
     # ── rendering ─────────────────────────────────────────────────────────────
 
     def _render(self, screen, font_sm, font_md, font_lg) -> None:
@@ -291,8 +342,14 @@ class Visualizer:
         self._draw_panel(screen, font_sm, font_md, font_lg)
 
     def _draw_world(self, screen) -> None:
+        vx, vy = self.view_x, self.view_y
+        # Cull cells outside viewport with a small margin
+        margin = 20.0 / VIEW_SCALE
         for cell in self.cells:
-            _draw_cell(screen, cell, SCALE)
+            x, y = cell.position
+            if (-margin <= x - vx <= VIEW_SIZE + margin and
+                    -margin <= y - vy <= VIEW_SIZE + margin):
+                _draw_cell(screen, cell, vx, vy, VIEW_SCALE)
 
     def _draw_panel(self, screen, font_sm, font_md, font_lg) -> None:
         pygame.draw.rect(screen, C_PANEL_BG, pygame.Rect(PANEL_X, 0, PANEL_W, WINDOW_H))
@@ -327,7 +384,14 @@ class Visualizer:
             screen.blit(font_md.render(value,       True, C_TEXT),  (col2, y))
             y += row_h
 
-        y += 6
+        # Viewport info
+        y += 4
+        screen.blit(font_sm.render(
+            f"View: ({self.view_x:.0f},{self.view_y:.0f})  100×100",
+            True, C_LABEL), (px0, y))
+        y += 16
+
+        y += 2
         pygame.draw.line(screen, C_DIVIDER, (px0, y), (WINDOW_W - 14, y))
         y += 14
 
@@ -336,7 +400,7 @@ class Visualizer:
         y += 16
 
         graph_w = PANEL_W - 28
-        graph_h = 170
+        graph_h = 160
         graph_rect = pygame.Rect(px0, y, graph_w, graph_h)
         pygame.draw.rect(screen, C_GRAPH_BG,  graph_rect)
         pygame.draw.rect(screen, C_DIVIDER,   graph_rect, 1)
@@ -368,7 +432,7 @@ class Visualizer:
                 screen.blit(font_sm.render(bp_str, True, (90, 100, 118)), (px0, y))
             y += 16
 
-        footer = f"--speed {self.speed}   --seed {self.seed}"
+        footer = f"--speed {self.speed}   --seed {self.seed}   [←↑→↓ pan]"
         if self.predation_evolved:
             footer += "   [predation ACTIVE]"
         screen.blit(font_sm.render(footer, True, (75, 85, 105)), (px0, WINDOW_H - 20))
