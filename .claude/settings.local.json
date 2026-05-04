@@ -2,7 +2,15 @@
   "permissions": {
     "allow": [
       "Bash(git add *)",
-      "Bash(git commit -m ' *)"
+      "Bash(git commit -m ' *)",
+      "Bash(del tests\\\\test_rules.py)",
+      "Bash(python simulation.py --ticks 1000 --interval 50)",
+      "Bash(python -m pytest tests/test_codon_table.py tests/test_dna.py tests/test_phenotype.py tests/test_simulation.py -v -x --timeout=300)",
+      "Bash(python -m pytest tests/test_codon_table.py tests/test_dna.py tests/test_phenotype.py tests/test_simulation.py -v -x)",
+      "Bash(python -m pytest tests/test_codon_table.py tests/test_dna.py tests/test_phenotype.py tests/test_simulation.py -v)",
+      "Bash(python *)",
+      "Bash(git rm *)",
+      "Bash(git commit *)"
     ]
   }
 }
